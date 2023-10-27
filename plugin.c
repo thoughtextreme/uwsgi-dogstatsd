@@ -169,7 +169,7 @@ static int dogstatsd_send_metric(struct uwsgi_buffer *ub, struct uwsgi_stats_pus
     if (uwsgi_buffer_append(ub, datadog_tags, strlen(datadog_tags))) return -1;
   }
 
-  if (sendto(sn->fd, ub->buf, ub->pos, 0, (struct sockaddr *) &sn->addr.sa_in, sn->addr_len) < 0) {
+  if (sendto(sn->fd, ub->buf, ub->pos, 0, (struct sockaddr *) &sn->addr.sa, sn->addr_len) < 0) {
     uwsgi_error("dogstatsd_send_metric()/sendto()");
   }
 
@@ -192,16 +192,29 @@ static void stats_pusher_dogstatsd(struct uwsgi_stats_pusher_instance *uspi, tim
       sn->prefix_len = 5;
     }
 
-    char *colon = strchr(uspi->arg, ':');
-    if (!colon) {
-      uwsgi_log("invalid dd address %s\n", uspi->arg);
-      if (comma) *comma = ',';
-      free(sn);
-      return;
-    }
-    sn->addr_len = socket_to_in_addr(uspi->arg, colon, 0, &sn->addr.sa_in);
+    // DN> add support for unix domain socket
+    if (uspi->arg[0] == '/') {
+        sn->addr_len = sizeof(sn->addr.sa_un);
+        size_t maxlen = sizeof(sn->addr.sa_un.sun_path) - 1;
+        strncpy(sn->addr.sa_un.sun_path, uspi->arg, maxlen);
+        sn->addr.sa_un.sun_path[maxlen] = '\0';
+        sn->addr.sa_un.sun_family = AF_UNIX;
 
-    sn->fd = socket(AF_INET, SOCK_DGRAM, 0);
+        sn->fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    }
+    else {
+        char *colon = strchr(uspi->arg, ':');
+        if (!colon) {
+          uwsgi_log("invalid dd address %s\n", uspi->arg);
+          if (comma) *comma = ',';
+          free(sn);
+          return;
+        }
+        sn->addr_len = socket_to_in_addr(uspi->arg, colon, 0, &sn->addr.sa_in);
+        sn->addr.sa_in.sin_family = AF_INET;
+
+        sn->fd = socket(AF_INET, SOCK_DGRAM, 0);
+    }
     if (sn->fd < 0) {
       uwsgi_error("stats_pusher_dogstatsd()/socket()");
       if (comma) *comma = ',';
